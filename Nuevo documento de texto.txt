@@ -1,0 +1,21 @@
+{
+  "short_name": "Focus by Dan",
+  "name": "Focus by Dan - Timer & Tracker",
+  "icons": [
+    {
+      "src": "favicon.ico",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon"
+    }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#0f172a",
+  "background_color": "#000000"
+}
+*(Nota: asegúrate de tener algún archivo de icono llamado `favicon.ico` en esa misma carpeta `public`).*
+
+3. Ve al archivo `index.html` (en la raíz de tu proyecto) y pega esta línea dentro de las etiquetas `<head>`:
+`<link rel="manifest" href="/manifest.json">`
+
+¡Eso es todo! Ahora el código React leerá ese manifiesto, el navegador sabrá que es una App, y el botón de "Instalar" aparecerá en la esquina superior derecha para descargarla en tu móvil o PC.
