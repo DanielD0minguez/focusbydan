@@ -5,7 +5,7 @@ import {
   Coffee, Dumbbell, Gamepad2, Headphones, 
   Laptop, Monitor, Music, PenTool, 
   Smartphone, Target, Terminal, Zap,
-  Sparkles, GraduationCap, Droplets, Calendar, AlarmClock 
+  Sparkles, GraduationCap, Droplets, Calendar, AlarmClock, Trash2, RotateCcw
 } from 'lucide-react';
 
 // Diccionario de iconos disponibles
@@ -70,7 +70,10 @@ const playAlarm = () => {
 };
 
 export default function App() {
-  const [tasks, setTasks] = useState(INITIAL_TASKS);
+  const [tasks, setTasks] = useState(() => {
+    const saved = localStorage.getItem('focus_tasks');
+    return saved ? JSON.parse(saved) : INITIAL_TASKS;
+  });
   const [view, setView] = useState('home'); 
   const [activeTask, setActiveTask] = useState(null);
   
@@ -79,14 +82,36 @@ export default function App() {
   const [isAlarmActive, setIsAlarmActive] = useState(false); // ¿Está sonando la alarma?
   const [taskSeconds, setTaskSeconds] = useState(0); // Tiempo invertido en la tarea actual
   
-  const [history, setHistory] = useState([]);
+  const [history, setHistory] = useState(() => {
+    const saved = localStorage.getItem('focus_history');
+    return saved ? JSON.parse(saved) : [];
+  });
+
+  // ESTADOS DE PERSISTENCIA PARA TIEMPO (Evita desfases al minimizar o cerrar)
+  const [countdownEndTime, setCountdownEndTime] = useState(() => {
+    const saved = localStorage.getItem('focus_countdown_end_time');
+    return saved ? parseInt(saved) : null;
+  });
+  const [taskStartTime, setTaskStartTime] = useState(() => {
+    const saved = localStorage.getItem('focus_task_start_time');
+    return saved ? parseInt(saved) : null;
+  });
   const [isAdding, setIsAdding] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [newTaskName, setNewTaskName] = useState('');
   const [newTaskIcon, setNewTaskIcon] = useState('Target');
   const [showCustomTime, setShowCustomTime] = useState(false);
   const [customHrs, setCustomHrs] = useState('');
   const [customMins, setCustomMins] = useState('');
   const [deferredPrompt, setDeferredPrompt] = useState(null); 
+  const [showMiniTimer, setShowMiniTimer] = useState(true);
+
+  // Solicitar permiso para notificaciones
+  useEffect(() => {
+    if ("Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
+  }, []);
 
   // PWA Install
   useEffect(() => {
@@ -102,40 +127,98 @@ export default function App() {
     if (outcome === 'accepted') setDeferredPrompt(null);
   };
 
-  // 1. MOTOR DEL RELOJ MAESTRO (Global Countdown) - Nunca se detiene si tiene tiempo
+  // PERSISTENCIA
+  useEffect(() => {
+    localStorage.setItem('focus_tasks', JSON.stringify(tasks));
+  }, [tasks]);
+
+  useEffect(() => {
+    localStorage.setItem('focus_history', JSON.stringify(history));
+  }, [history]);
+
+  useEffect(() => {
+    if (countdownEndTime) localStorage.setItem('focus_countdown_end_time', countdownEndTime.toString());
+    else localStorage.removeItem('focus_countdown_end_time');
+  }, [countdownEndTime]);
+
+  useEffect(() => {
+    if (taskStartTime) localStorage.setItem('focus_task_start_time', taskStartTime.toString());
+    else localStorage.removeItem('focus_task_start_time');
+  }, [taskStartTime]);
+
+  // 1. MOTOR DEL RELOJ MAESTRO (Global Countdown)
   useEffect(() => {
     let interval = null;
-    if (globalCountdown !== null && globalCountdown > 0) {
+    if (countdownEndTime !== null) {
       interval = setInterval(() => {
-        setGlobalCountdown((prev) => {
-          if (prev <= 1) {
-            setIsAlarmActive(true);
-            return 0;
-          }
-          return prev - 1;
-        });
+        const now = Date.now();
+        const diff = Math.max(0, Math.floor((countdownEndTime - now) / 1000));
+        
+        setGlobalCountdown(diff);
+        
+        if (diff <= 0) {
+          setIsAlarmActive(true);
+          setCountdownEndTime(null);
+          clearInterval(interval);
+        }
+      }, 1000);
+    } else {
+      setGlobalCountdown(null);
+    }
+    return () => clearInterval(interval);
+  }, [countdownEndTime]);
+
+  // 2. MOTOR DEL RELOJ DE TAREA (Sub-registro)
+  useEffect(() => {
+    let interval = null;
+    if (activeTask && taskStartTime !== null) {
+      interval = setInterval(() => {
+        const now = Date.now();
+        const elapsed = Math.max(0, Math.floor((now - taskStartTime) / 1000));
+        setTaskSeconds(elapsed);
       }, 1000);
     }
     return () => clearInterval(interval);
+  }, [activeTask, taskStartTime]);
+
+  // 3. SINCRONIZACIÓN AL VOLVER (Visibility API)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        const now = Date.now();
+        if (countdownEndTime) {
+          setGlobalCountdown(Math.max(0, Math.floor((countdownEndTime - now) / 1000)));
+        }
+        if (taskStartTime && view === 'timer') {
+          setTaskSeconds(Math.max(0, Math.floor((now - taskStartTime) / 1000)));
+        }
+      }
+    };
+    window.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => window.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [countdownEndTime, taskStartTime, view]);
+
+  // 4. ACTUALIZAR TÍTULO DE LA PESTAÑA
+  useEffect(() => {
+    const timeText = globalCountdown !== null ? `(${formatTime(globalCountdown)}) ` : '';
+    document.title = `${timeText}Focus by Dan`;
   }, [globalCountdown]);
 
-  // 2. MOTOR DEL RELOJ DE TAREA (Sub-registro) - Solo corre cuando hay una tarea activa
-  useEffect(() => {
-    let interval = null;
-    if (view === 'timer') {
-      interval = setInterval(() => {
-        setTaskSeconds((s) => s + 1);
-      }, 1000);
-    }
-    return () => clearInterval(interval);
-  }, [view]);
-
-  // 3. BUCLE DE LA ALARMA (Suena en bucle hasta que el usuario la apague)
+  // 5. BUCLE DE LA ALARMA Y NOTIFICACIONES
   useEffect(() => {
     let alarmInterval = null;
     if (isAlarmActive) {
       playAlarm(); 
       alarmInterval = setInterval(playAlarm, 2000);
+
+      // Notificación si no está visible
+      if (document.visibilityState !== 'visible' && Notification.permission === "granted") {
+        new Notification("¡Tiempo Agotado!", {
+          body: "El bloque de tiempo ha finalizado.",
+          icon: "/favicon.ico",
+          tag: "focus-alarm"
+        });
+      }
     }
     return () => clearInterval(alarmInterval); 
   }, [isAlarmActive]);
@@ -165,11 +248,14 @@ export default function App() {
 
   // CONTROL DEL RELOJ MAESTRO
   const handleSetGlobalCountdown = (secs) => {
+    const endTime = Date.now() + (secs * 1000);
+    setCountdownEndTime(endTime);
     setGlobalCountdown(secs);
     setIsAlarmActive(false);
   };
 
   const cancelGlobalCountdown = () => {
+    setCountdownEndTime(null);
     setGlobalCountdown(null);
     setIsAlarmActive(false);
   };
@@ -186,16 +272,42 @@ export default function App() {
 
   // CONTROL DE TAREAS (Sub-registros)
   const handleStartTask = (task) => {
+    // Si ya había una tarea corriendo, la guardamos automáticamente
+    if (activeTask && task.id !== activeTask.id) {
+      saveToHistory(taskSeconds);
+    }
+    
+    // Si pulsamos la misma tarea que ya corre, simplemente volvemos a verla
+    if (activeTask && task.id === activeTask.id) {
+      setView('timer');
+      return;
+    }
+
+    const startTime = Date.now();
     setActiveTask(task);
+    setTaskStartTime(startTime);
     setTaskSeconds(0);
     setView('timer');
+    setShowMiniTimer(true);
   };
 
   const handleStopTask = () => {
     saveToHistory(taskSeconds);
     setView('home');
     setActiveTask(null);
+    setTaskStartTime(null);
     setTaskSeconds(0);
+  };
+
+  const handleCancelTask = () => {
+    setView('home'); // Ahora solo regresa, no borra nada
+  };
+
+  const handleResetHistory = () => {
+    if (window.confirm('¿Borrar todas las estadísticas? Esta acción no se puede deshacer.')) {
+      setHistory([]);
+      localStorage.removeItem('focus_history');
+    }
   };
 
   const handleAddTask = (e) => {
@@ -204,6 +316,12 @@ export default function App() {
     const randomColor = COLORS[Math.floor(Math.random() * COLORS.length)];
     setTasks([...tasks, { id: Date.now().toString(), name: newTaskName.trim(), icon: newTaskIcon, color: randomColor }]);
     setIsAdding(false); setNewTaskName(''); setNewTaskIcon('Target');
+  };
+
+  const handleDeleteTask = (taskId) => {
+    if (window.confirm('¿Borrar esta tarea?')) {
+      setTasks(prev => prev.filter(t => t.id !== taskId));
+    }
   };
 
   const renderIcon = (iconName, props = {}) => {
@@ -237,8 +355,11 @@ export default function App() {
       
       {/* HEADER */}
       <header className="flex-none p-4 sm:p-6 text-center shadow-md bg-slate-900 z-10 flex items-center justify-center relative">
-        {view === 'summary' && (
-          <button onClick={() => setView('home')} className="absolute left-4 sm:left-6 text-slate-400 hover:text-white transition-colors">
+        {(view === 'summary' || view === 'timer') && (
+          <button 
+            onClick={() => view === 'timer' ? handleCancelTask() : setView('home')} 
+            className="absolute left-4 sm:left-6 text-slate-400 hover:text-white transition-colors"
+          >
             <ArrowLeft size={24} className="sm:w-7 sm:h-7" />
           </button>
         )}
@@ -322,26 +443,49 @@ export default function App() {
           {/* CUADRÍCULA DE TAREAS (Responsiva) */}
           <div className="w-full max-w-4xl flex flex-wrap content-start justify-center gap-3 sm:gap-6">
             {tasks.map((task) => (
-              <button
-                key={task.id}
-                onClick={() => handleStartTask(task)}
-                className={`${task.color} transition-all duration-200 rounded-3xl flex flex-col items-center justify-center gap-2 sm:gap-3 w-[28%] min-w-[100px] sm:w-32 md:w-40 aspect-square border border-white/20 shadow-[inset_0_1px_1px_rgba(255,255,255,0.4),0_4px_0_rgba(0,0,0,0.3),0_8px_16px_rgba(0,0,0,0.5)] transform hover:-translate-y-1 active:translate-y-2 relative overflow-hidden group`}
-              >
-                <div className="absolute inset-0 bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity rounded-3xl"></div>
-                {renderIcon(task.icon, { size: 36, className: "text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.4)] relative z-10 sm:w-12 sm:h-12" })}
-                <span className="font-medium text-xs sm:text-base text-white truncate w-11/12 drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)] relative z-10">
-                  {task.name}
-                </span>
-              </button>
+              <div key={task.id} className="relative w-[28%] min-w-[100px] sm:w-32 md:w-40 aspect-square group">
+                <button
+                  onClick={() => isDeleting ? handleDeleteTask(task.id) : handleStartTask(task)}
+                  className={`${task.color} w-full h-full transition-all duration-200 rounded-3xl flex flex-col items-center justify-center gap-2 sm:gap-3 border border-white/20 shadow-[inset_0_1px_1px_rgba(255,255,255,0.4),0_4px_0_rgba(0,0,0,0.3),0_8px_16px_rgba(0,0,0,0.5)] transform hover:-translate-y-1 active:translate-y-2 relative overflow-hidden ${isDeleting ? 'animate-jitter' : ''}`}
+                >
+                  <div className="absolute inset-0 bg-white/10 opacity-0 group-hover:opacity-100 transition-opacity rounded-3xl"></div>
+                  {renderIcon(task.icon, { size: 36, className: "text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.4)] relative z-10 sm:w-12 sm:h-12" })}
+                  <span className="font-medium text-xs sm:text-base text-white truncate w-11/12 drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)] relative z-10">
+                    {task.name}
+                  </span>
+                </button>
+                {isDeleting && (
+                  <button 
+                    onClick={(e) => { e.stopPropagation(); handleDeleteTask(task.id); }}
+                    className="absolute -top-2 -right-2 bg-red-500 text-white p-1.5 rounded-full shadow-lg z-20 hover:scale-110 active:scale-95 transition-transform"
+                  >
+                    <X size={16} />
+                  </button>
+                )}
+              </div>
             ))}
           </div>
 
           <button onClick={() => setView('summary')} className="absolute bottom-8 left-8 bg-slate-800 text-white p-4 rounded-full shadow-lg hover:scale-105 active:scale-95 border border-slate-700">
             <BarChart2 size={32} />
           </button>
-          <button onClick={() => setIsAdding(true)} className="absolute bottom-8 right-8 bg-white text-slate-900 p-4 rounded-full shadow-lg hover:scale-105 active:scale-95">
-            <Plus size={32} />
-          </button>
+          
+          <div className="absolute bottom-8 right-8 flex gap-3">
+            <button 
+              onClick={() => setIsDeleting(!isDeleting)} 
+              className={`p-4 rounded-full shadow-lg hover:scale-105 active:scale-95 border transition-all ${isDeleting ? 'bg-red-500 text-white border-red-400 animate-jitter' : 'bg-slate-800 text-slate-400 border-slate-700'}`}
+              title={isDeleting ? "Terminar de borrar" : "Modo borrar"}
+            >
+              <Trash2 size={32} />
+            </button>
+            <button 
+              onClick={() => setIsAdding(true)} 
+              className="bg-white text-slate-900 p-4 rounded-full shadow-lg hover:scale-105 active:scale-95"
+              title="Añadir tarea"
+            >
+              <Plus size={32} />
+            </button>
+          </div>
         </main>
       )}
 
@@ -439,13 +583,21 @@ export default function App() {
 
             {/* Patrón del Día (Línea de tiempo de eventos) */}
             {history.length > 0 && (
-              <div className="space-y-4 pt-6 border-t border-slate-700/50 w-full">
-                <h3 className="text-lg font-bold text-slate-300 flex items-center gap-2 px-2">
-                  <List size={20} /> Patrón del Día
-                </h3>
+              <div className="space-y-4 pt-6 border-t border-slate-700/50 w-full mb-10">
+                <div className="flex items-center justify-between px-2">
+                  <h3 className="text-lg font-bold text-slate-300 flex items-center gap-2">
+                    <List size={20} /> Patrón del Día
+                  </h3>
+                  <button 
+                    onClick={handleResetHistory}
+                    className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest text-red-400/70 hover:text-red-400 transition-colors p-2 rounded-lg hover:bg-red-400/10 border border-red-400/20"
+                  >
+                    <RotateCcw size={12} /> Reiniciar
+                  </button>
+                </div>
                 
                 <div className="relative border-l-2 border-slate-700 ml-4 pl-6 space-y-4 py-2">
-                  {history.map((session) => (
+                  {history.slice().reverse().map((session) => (
                     <div key={session.id} className="relative">
                       <div className={`absolute -left-[33px] top-1/2 -translate-y-1/2 w-4 h-4 rounded-full ${session.color} border-4 border-slate-900`}></div>
                       
@@ -500,6 +652,36 @@ export default function App() {
               <button type="submit" className="w-full bg-blue-500 text-white font-bold text-lg py-4 rounded-xl hover:bg-blue-600">Iniciar Reloj Maestro</button>
             </form>
           </div>
+        </div>
+      )}
+
+      {/* MINIATURA PERSISTENTE */}
+      {activeTask && view !== 'timer' && showMiniTimer && (
+        <div 
+          onClick={() => setView('timer')}
+          className="fixed bottom-24 left-1/2 -translate-x-1/2 w-[90%] max-w-sm bg-slate-800/95 backdrop-blur-md border border-slate-700/50 p-3 rounded-2xl shadow-2xl flex items-center justify-between z-40 animate-in slide-in-from-bottom-5 cursor-pointer"
+        >
+           <div className="flex items-center gap-3 overflow-hidden">
+              <div className={`p-2 rounded-xl ${activeTask.color} shadow-lg border border-white/10`}>
+                 {renderIcon(activeTask.icon, { size: 20, className: "text-white" })}
+              </div>
+              <div className="overflow-hidden">
+                 <p className="text-[10px] uppercase font-black text-blue-400 tracking-wider">En progreso</p>
+                 <p className="text-white text-sm font-bold truncate">{activeTask.name}</p>
+              </div>
+           </div>
+           
+           <div className="flex items-center gap-4">
+              <div className="text-xl font-mono font-bold text-white drop-shadow-sm">
+                {formatTime(taskSeconds)}
+              </div>
+              <button 
+                onClick={(e) => { e.stopPropagation(); setShowMiniTimer(false); }}
+                className="bg-slate-700/50 hover:bg-slate-700 text-slate-400 hover:text-white p-1.5 rounded-full transition-colors"
+              >
+                <X size={16} />
+              </button>
+           </div>
         </div>
       )}
     </div>

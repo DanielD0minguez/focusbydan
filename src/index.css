@@ -2,6 +2,19 @@
 @tailwind components;
 @tailwind utilities;
 
+@keyframes jitter {
+  0% { transform: rotate(0deg); }
+  25% { transform: rotate(0.8deg); }
+  50% { transform: rotate(0deg); }
+  75% { transform: rotate(-0.8deg); }
+  100% { transform: rotate(0deg); }
+}
+
+.animate-jitter {
+  animation: jitter 0.2s infinite ease-in-out;
+}
+
+
 body {
   margin: 0;
   display: block;
