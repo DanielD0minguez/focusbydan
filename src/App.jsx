@@ -5,7 +5,9 @@ import {
   Coffee, Dumbbell, Gamepad2, Headphones, 
   Laptop, Monitor, Music, PenTool, 
   Smartphone, Target, Terminal, Zap,
-  Sparkles, GraduationCap, Droplets, Calendar, AlarmClock, Trash2, RotateCcw
+  Sparkles, GraduationCap, Droplets, Calendar, AlarmClock, Trash2, RotateCcw,
+  Utensils, Home, ShoppingCart, HeartPulse, Camera,
+  Box, Circle, Triangle, Hexagon, Pentagon
 } from 'lucide-react';
 
 // Diccionario de iconos disponibles
@@ -14,7 +16,9 @@ const AVAILABLE_ICONS = {
   Coffee, Dumbbell, Gamepad2, Headphones, 
   Laptop, Monitor, Music, PenTool, 
   Smartphone, Target, Terminal, Zap,
-  Sparkles, GraduationCap, Droplets, Calendar
+  Sparkles, GraduationCap, Droplets, Calendar,
+  Utensils, Home, ShoppingCart, HeartPulse, Camera,
+  Box, Circle, Triangle, Hexagon, Pentagon
 };
 
 // Tareas por defecto
@@ -682,8 +686,30 @@ export default function App() {
           <div className="bg-slate-800 border border-slate-700 p-6 rounded-3xl w-full max-w-md shadow-2xl">
             <div className="flex justify-between items-center mb-6"><h2 className="text-xl font-bold">Nueva Tarea</h2><button onClick={() => setIsAdding(false)} className="text-slate-400 hover:text-white"><X size={24} /></button></div>
             <form onSubmit={handleAddTask} className="space-y-6">
-              <div><input type="text" autoFocus required maxLength={15} value={newTaskName} onChange={(e) => setNewTaskName(e.target.value)} placeholder="Ej: Leer libro..." className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white focus:border-blue-500" /></div>
-              <button type="submit" className="w-full bg-white text-slate-900 font-bold text-lg py-4 rounded-xl hover:bg-slate-200">Crear Tarea</button>
+              <div>
+                <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2 px-1">Nombre de la tarea</label>
+                <input type="text" autoFocus required maxLength={15} value={newTaskName} onChange={(e) => setNewTaskName(e.target.value)} placeholder="Ej: Leer libro..." className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-white focus:border-blue-500 outline-none" />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-3 px-1">Seleccionar Icono</label>
+                <div className="grid grid-cols-5 sm:grid-cols-6 gap-3 max-h-48 overflow-y-auto p-2 bg-slate-900/50 rounded-xl border border-slate-700/50 scrollbar-hide">
+                  {Object.keys(AVAILABLE_ICONS).map((iconName) => (
+                    <button
+                      key={iconName}
+                      type="button"
+                      onClick={() => setNewTaskIcon(iconName)}
+                      className={`p-3 rounded-xl flex items-center justify-center transition-all ${newTaskIcon === iconName ? 'bg-blue-500 scale-110 shadow-lg' : 'bg-slate-700/50 hover:bg-slate-700 text-slate-400'}`}
+                    >
+                      {renderIcon(iconName, { size: 24, className: newTaskIcon === iconName ? 'text-white' : '' })}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <button type="submit" className="w-full bg-white text-slate-900 font-bold text-lg py-4 rounded-xl hover:bg-slate-200 shadow-xl transform active:scale-95 transition-all">
+                Crear Tarea
+              </button>
             </form>
           </div>
         </div>
