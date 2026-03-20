@@ -75,7 +75,10 @@ export default function App() {
     return saved ? JSON.parse(saved) : INITIAL_TASKS;
   });
   const [view, setView] = useState('home'); 
-  const [activeTask, setActiveTask] = useState(null);
+  const [activeTask, setActiveTask] = useState(() => {
+    const saved = localStorage.getItem('focus_active_task');
+    return saved ? JSON.parse(saved) : null;
+  });
   
   // ESTADOS MAESTROS DE TIEMPO
   const [globalCountdown, setGlobalCountdown] = useState(null); // Reloj Maestro
@@ -145,6 +148,52 @@ export default function App() {
     if (taskStartTime) localStorage.setItem('focus_task_start_time', taskStartTime.toString());
     else localStorage.removeItem('focus_task_start_time');
   }, [taskStartTime]);
+
+  useEffect(() => {
+    if (activeTask) localStorage.setItem('focus_active_task', JSON.stringify(activeTask));
+    else localStorage.removeItem('focus_active_task');
+  }, [activeTask]);
+
+  // AUTO-GUARDADO AL CERRAR (como si se hiciera STOP)
+  useEffect(() => {
+    const handleAutoSave = () => {
+      // Necesitamos leer directamente de localStorage porque en beforeunload 
+      // los estados de React podrían no ser accesibles o estar desactualizados.
+      const savedTask = localStorage.getItem('focus_active_task');
+      const savedStartTime = localStorage.getItem('focus_task_start_time');
+      
+      if (savedTask && savedStartTime) {
+        const task = JSON.parse(savedTask);
+        const startTime = parseInt(savedStartTime);
+        const now = Date.now();
+        const duration = Math.max(0, Math.floor((now - startTime) / 1000));
+        
+        if (duration > 0) {
+          const historySaved = localStorage.getItem('focus_history');
+          const history = historySaved ? JSON.parse(historySaved) : [];
+          
+          const newSession = {
+            id: now.toString(),
+            taskId: task.id,
+            taskName: task.name,
+            icon: task.icon,
+            color: task.color,
+            duration: duration,
+            timestamp: new Date(now).toISOString()
+          };
+          
+          localStorage.setItem('focus_history', JSON.stringify([...history, newSession]));
+        }
+        
+        // Limpiamos la tarea activa para que al volver a abrir esté en el home
+        localStorage.removeItem('focus_active_task');
+        localStorage.removeItem('focus_task_start_time');
+      }
+    };
+
+    window.addEventListener('beforeunload', handleAutoSave);
+    return () => window.removeEventListener('beforeunload', handleAutoSave);
+  }, []);
 
   // 1. MOTOR DEL RELOJ MAESTRO (Global Countdown)
   useEffect(() => {
