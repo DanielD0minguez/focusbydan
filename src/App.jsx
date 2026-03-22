@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Play, Square, Plus, X, BarChart2, ArrowLeft, Activity, Clock, List, PieChart, Download, BellRing,
   Brain, BookOpen, Briefcase, Code, 
@@ -7,8 +7,18 @@ import {
   Smartphone, Target, Terminal, Zap,
   Sparkles, GraduationCap, Droplets, Calendar, AlarmClock, Trash2, RotateCcw,
   Utensils, Home, ShoppingCart, HeartPulse, Camera,
-  Box, Circle, Triangle, Hexagon, Pentagon
+  Box, Circle, Triangle, Hexagon, Pentagon, TrendingUp, TrendingDown, ChevronRight
 } from 'lucide-react';
+import { 
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, 
+  LineChart, Line, AreaChart, Area, Cell 
+} from 'recharts';
+import { 
+  startOfDay, endOfDay, startOfWeek, endOfWeek, startOfMonth, endOfMonth, 
+  subDays, subWeeks, subMonths, isWithinInterval, format, parseISO, eachDayOfInterval,
+  isSameDay, isSameWeek, isSameMonth
+} from 'date-fns';
+import { es } from 'date-fns/locale';
 
 // Diccionario de iconos disponibles
 const AVAILABLE_ICONS = {
@@ -112,6 +122,8 @@ export default function App() {
   const [customMins, setCustomMins] = useState('');
   const [deferredPrompt, setDeferredPrompt] = useState(null); 
   const [showMiniTimer, setShowMiniTimer] = useState(true);
+  const [period, setPeriod] = useState('day'); // 'day', 'week', 'month'
+  const [selectedStatCategoryId, setSelectedStatCategoryId] = useState(null);
 
   // Solicitar permiso para notificaciones
   useEffect(() => {
@@ -383,20 +395,97 @@ export default function App() {
   };
 
   // --- Lógica de Estadísticas ---
-  const stats = history.reduce((acc, session) => {
-    if (!acc[session.taskId]) acc[session.taskId] = { name: session.taskName, icon: session.icon, color: session.color, totalDuration: 0, sessions: 0 };
-    acc[session.taskId].totalDuration += session.duration;
-    acc[session.taskId].sessions += 1;
-    return acc;
-  }, {});
+  // --- Lógica de Estadísticas Avanzada ---
+  const statsData = useMemo(() => {
+    const now = new Date();
+    let currentInterval, prevInterval;
+    
+    if (period === 'day') {
+      currentInterval = { start: startOfDay(now), end: endOfDay(now) };
+      prevInterval = { start: startOfDay(subDays(now, 1)), end: endOfDay(subDays(now, 1)) };
+    } else if (period === 'week') {
+      currentInterval = { start: startOfWeek(now, { weekStartsOn: 1 }), end: endOfWeek(now, { weekStartsOn: 1 }) };
+      prevInterval = { start: startOfWeek(subWeeks(now, 1), { weekStartsOn: 1 }), end: endOfWeek(subWeeks(now, 1), { weekStartsOn: 1 }) };
+    } else {
+      currentInterval = { start: startOfMonth(now), end: endOfMonth(now) };
+      prevInterval = { start: startOfMonth(subMonths(now, 1)), end: endOfMonth(subMonths(now, 1)) };
+    }
 
-  const statsArray = Object.values(stats).sort((a, b) => b.totalDuration - a.totalDuration);
-  const grandTotalDuration = history.reduce((sum, session) => sum + session.duration, 0);
+    const currentHistory = history.filter(s => isWithinInterval(parseISO(s.timestamp), currentInterval));
+    const prevHistory = history.filter(s => isWithinInterval(parseISO(s.timestamp), prevInterval));
+
+    const getStats = (hist) => hist.reduce((acc, session) => {
+      if (!acc[session.taskId]) acc[session.taskId] = { name: session.taskName, icon: session.icon, color: session.color, total: 0 };
+      acc[session.taskId].total += session.duration;
+      return acc;
+    }, {});
+
+    const currentStats = getStats(currentHistory);
+    const prevStats = getStats(prevHistory);
+
+    // Unir todos los IDs de tareas de las tareas actuales más las que tengan historial en estos periodos
+    const allTaskIds = Array.from(new Set([
+      ...tasks.map(t => t.id),
+      ...Object.keys(currentStats),
+      ...Object.keys(prevStats)
+    ]));
+    
+    const statsArray = allTaskIds.map(id => {
+      const current = currentStats[id] || { total: 0, name: tasks.find(t => t.id === id)?.name || 'Tarea eliminada', icon: tasks.find(t => t.id === id)?.icon || 'Target', color: tasks.find(t => t.id === id)?.color || 'bg-slate-500' };
+      const prev = prevStats[id]?.total || 0;
+      const diff = current.total - prev;
+      const trend = diff > 0 ? 'improving' : diff < 0 ? 'worsening' : 'stable';
+      const percentChange = prev > 0 ? (diff / prev) * 100 : current.total > 0 ? 100 : 0;
+      
+      return {
+        id,
+        ...current,
+        totalDuration: current.total,
+        prevTotal: prev,
+        diff,
+        trend,
+        percentChange
+      };
+    }).sort((a, b) => b.totalDuration - a.totalDuration);
+
+    const grandTotalDuration = statsArray.reduce((sum, s) => sum + s.totalDuration, 0);
+
+    // Preparar datos para la gráfica de tendencia (últimos 7 periodos o similar)
+    // Para simplificar, mostraremos datos por día de la semana o por día del mes
+    let chartDays = [];
+    if (period === 'day' || period === 'week') {
+      // Mostrar últimos 7 días
+      chartDays = eachDayOfInterval({
+        start: subDays(now, 6),
+        end: now
+      });
+    } else {
+      // Mostrar últimos 30 días
+      chartDays = eachDayOfInterval({
+        start: subDays(now, 29),
+        end: now
+      });
+    }
+
+    const chartData = chartDays.map(date => {
+      const dayData = { name: format(date, period === 'month' ? 'dd' : 'EEE', { locale: es }) };
+      allTaskIds.forEach(id => {
+        const dayFocus = history.filter(s => isSameDay(parseISO(s.timestamp), date) && s.taskId === id)
+          .reduce((sum, s) => sum + s.duration, 0);
+        dayData[id] = Math.round(dayFocus / 60); // Minutos
+      });
+      return dayData;
+    });
+
+    return { statsArray, grandTotalDuration, chartData, allTaskIds };
+  }, [history, period, tasks]);
+
+  const { statsArray, grandTotalDuration, chartData, allTaskIds } = statsData;
 
   let currentPercent = 0;
   const gradientStops = statsArray.map(stat => {
-    const percent = (stat.totalDuration / TOTAL_DAY_SECONDS) * 100;
-    const start = currentPercent; const end = Math.min(start + percent, 100);
+    const percent = (stat.totalDuration / (period === 'day' ? TOTAL_DAY_SECONDS : period === 'week' ? TOTAL_DAY_SECONDS * 7 : TOTAL_DAY_SECONDS * 30)) * 100;
+    const start = currentPercent; const end = Math.min(start + (percent || 1), 100);
     const hex = COLORS_HEX[stat.color] || '#ffffff';
     currentPercent = end;
     return `${hex} ${start}% ${end}%`;
@@ -600,69 +689,176 @@ export default function App() {
 
       {/* PANTALLA DE RESUMEN / ESTADÍSTICAS */}
       {view === 'summary' && (
-        <main className="flex-1 overflow-y-auto p-6 flex flex-col items-center">
+        <main className="flex-1 overflow-y-auto p-4 sm:p-6 flex flex-col items-center">
           <div className="w-full max-w-2xl space-y-6 pb-20">
             
+            {/* Selector de Periodo */}
+            <div className="flex bg-slate-800/50 p-1 rounded-2xl border border-slate-700/50 w-full">
+              {[
+                { id: 'day', label: 'Día' },
+                { id: 'week', label: 'Semana' },
+                { id: 'month', label: 'Mes' }
+              ].map(p => (
+                <button
+                  key={p.id}
+                  onClick={() => setPeriod(p.id)}
+                  className={`flex-1 py-2 text-xs sm:text-sm font-bold rounded-xl transition-all ${period === p.id ? 'bg-white text-slate-900 shadow-lg' : 'text-slate-400 hover:text-white'}`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Gráfica de Desempeño General */}
+            <div className="bg-slate-800 border border-slate-700 rounded-3xl p-5 shadow-lg">
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-sm font-medium uppercase tracking-wider text-slate-400 flex items-center gap-2">
+                  <Activity size={18} /> Tendencia de Enfoque (min)
+                </h3>
+              </div>
+              <div className="h-48 sm:h-64 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={chartData}>
+                    <defs>
+                      {allTaskIds.map(id => {
+                        const task = tasks.find(t => t.id === id);
+                        const hex = COLORS_HEX[task?.color] || '#3b82f6';
+                        return (
+                          <linearGradient key={`grad-${id}`} id={`color-${id}`} x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor={hex} stopOpacity={0.3}/>
+                            <stop offset="95%" stopColor={hex} stopOpacity={0}/>
+                          </linearGradient>
+                        );
+                      })}
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" vertical={false} />
+                    <XAxis 
+                      dataKey="name" 
+                      stroke="#94a3b8" 
+                      fontSize={12} 
+                      tickLine={false} 
+                      axisLine={false}
+                    />
+                    <YAxis 
+                      stroke="#94a3b8" 
+                      fontSize={12} 
+                      tickLine={false} 
+                      axisLine={false}
+                      tickFormatter={(value) => `${value}m`}
+                    />
+                    <Tooltip 
+                      contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '12px', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                      itemStyle={{ fontSize: '12px', fontWeight: 'bold' }}
+                      formatter={(value, name) => {
+                        const task = tasks.find(t => t.id === name);
+                        return [`${value} min`, task?.name || name];
+                      }}
+                      labelStyle={{ color: '#94a3b8', marginBottom: '4px', fontWeight: 'bold' }}
+                    />
+                    {allTaskIds.map(id => (
+                      <Area 
+                        key={id}
+                        type="monotone" 
+                        dataKey={id} 
+                        stroke={COLORS_HEX[tasks.find(t => t.id === id)?.color] || '#3b82f6'} 
+                        fillOpacity={1} 
+                        fill={`url(#color-${id})`} 
+                        strokeWidth={2}
+                        stackId="1"
+                      />
+                    ))}
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            {/* Distribución Circular */}
             <div className="bg-slate-800 border border-slate-700 rounded-3xl p-6 flex flex-col items-center justify-center shadow-lg">
               <h3 className="text-sm font-medium uppercase tracking-wider text-slate-400 mb-6 flex items-center gap-2">
-                <PieChart size={18} /> Distribución de 24 Horas
+                <PieChart size={18} /> Tiempo Total {period === 'day' ? 'Hoy' : period === 'week' ? 'Semana' : 'Mes'}
               </h3>
               <div className="w-56 h-56 sm:w-64 sm:h-64 rounded-full flex items-center justify-center relative shadow-inner mb-6 transition-all duration-500" style={{ background: `conic-gradient(${gradientStops.join(', ')})` }}>
                 <div className="w-40 h-40 sm:w-48 sm:h-48 bg-slate-800 rounded-full flex flex-col items-center justify-center z-10 shadow-[inset_0_4px_10px_rgba(0,0,0,0.3)] border border-slate-700/50">
                   <p className="text-slate-400 text-xs font-medium uppercase tracking-wider mb-1">Enfocado</p>
-                  <p className="text-2xl sm:text-3xl font-bold text-white">{formatTime(grandTotalDuration)}</p>
+                  <p className="text-2xl sm:text-3xl font-bold text-white tracking-tighter">{formatTime(grandTotalDuration)}</p>
                 </div>
               </div>
             </div>
 
+            {/* Desglose por Categoría con Tendencia */}
             <div className="space-y-4">
-              <h3 className="text-lg font-bold text-slate-300 flex items-center gap-2 px-2"><Activity size={20} /> Desglose</h3>
+              <div className="flex items-center justify-between px-2">
+                <h3 className="text-lg font-bold text-slate-300 flex items-center gap-2"><List size={20} /> Desglose por Categoría</h3>
+              </div>
+              
               {statsArray.length === 0 ? (
-                <div className="text-center py-10 bg-slate-800/50 rounded-3xl border border-slate-700/50"><p className="text-slate-400">Sin actividades registradas.</p></div>
+                <div className="text-center py-10 bg-slate-800/50 rounded-3xl border border-slate-700/50">
+                  <p className="text-slate-400">Sin actividades en este periodo.</p>
+                </div>
               ) : (
-                statsArray.map((stat, idx) => (
-                  <div key={idx} className="bg-slate-800 border border-slate-700 rounded-2xl p-4 flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                      <div className={`p-3 rounded-xl ${stat.color} shadow-[inset_0_1px_2px_rgba(255,255,255,0.3)] border border-white/10`}>
-                        {renderIcon(stat.icon, { size: 28, className: "text-white drop-shadow-sm" })}
+                <div className="grid gap-3">
+                  {statsArray.map((stat) => (
+                    <div key={stat.id} className="bg-slate-800 border border-slate-700 rounded-2xl p-4 flex items-center justify-between group hover:border-slate-500 transition-colors">
+                      <div className="flex items-center gap-4">
+                        <div className={`p-3 rounded-xl ${stat.color} shadow-[inset_0_1px_2px_rgba(255,255,255,0.3)] border border-white/10`}>
+                          {renderIcon(stat.icon, { size: 24, className: "text-white" })}
+                        </div>
+                        <div>
+                          <p className="font-bold text-white">{stat.name}</p>
+                          <div className="flex items-center gap-2">
+                            {stat.trend === 'improving' ? (
+                              <span className="text-[10px] font-black uppercase text-emerald-400 flex items-center gap-0.5">
+                                <TrendingUp size={10} /> +{Math.round(stat.percentChange)}% mejorando
+                              </span>
+                            ) : stat.trend === 'worsening' ? (
+                              <span className="text-[10px] font-black uppercase text-rose-400 flex items-center gap-0.5">
+                                <TrendingDown size={10} /> {Math.round(stat.percentChange)}% bajando
+                              </span>
+                            ) : (
+                              <span className="text-[10px] font-black uppercase text-slate-500">Estable</span>
+                            )}
+                          </div>
+                        </div>
                       </div>
-                      <div><p className="font-bold text-lg text-white">{stat.name}</p></div>
+                      <div className="text-right">
+                        <p className="font-mono text-lg font-bold text-white">{formatTime(stat.totalDuration)}</p>
+                        <p className="text-[10px] text-slate-500 uppercase font-bold">vs anterior: {formatTime(stat.prevTotal)}</p>
+                      </div>
                     </div>
-                    <div className="text-right"><p className="font-mono text-lg font-medium text-white">{formatTime(stat.totalDuration)}</p></div>
-                  </div>
-                ))
+                  ))}
+                </div>
               )}
             </div>
 
-            {/* Patrón del Día (Línea de tiempo de eventos) */}
+            {/* Patrón de Actividad Reciente */}
             {history.length > 0 && (
               <div className="space-y-4 pt-6 border-t border-slate-700/50 w-full mb-10">
                 <div className="flex items-center justify-between px-2">
                   <h3 className="text-lg font-bold text-slate-300 flex items-center gap-2">
-                    <List size={20} /> Patrón del Día
+                    <List size={20} /> Historial Reciente
                   </h3>
                   <button 
                     onClick={handleResetHistory}
                     className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest text-red-400/70 hover:text-red-400 transition-colors p-2 rounded-lg hover:bg-red-400/10 border border-red-400/20"
                   >
-                    <RotateCcw size={12} /> Reiniciar
+                    <RotateCcw size={12} /> Reiniciar Todo
                   </button>
                 </div>
                 
                 <div className="relative border-l-2 border-slate-700 ml-4 pl-6 space-y-4 py-2">
-                  {history.slice().reverse().map((session) => (
+                  {history.slice(-10).reverse().map((session) => (
                     <div key={session.id} className="relative">
                       <div className={`absolute -left-[33px] top-1/2 -translate-y-1/2 w-4 h-4 rounded-full ${session.color} border-4 border-slate-900`}></div>
                       
                       <div className="bg-slate-800/50 border border-slate-700 rounded-2xl p-3 flex items-center justify-between shadow-sm">
                         <div className="flex items-center gap-3">
                           <div className={`p-2 rounded-lg ${session.color} shadow-[inset_0_1px_1px_rgba(255,255,255,0.3)] border border-white/10`}>
-                            {renderIcon(session.icon, { size: 18, className: "text-white drop-shadow-sm" })}
+                            {renderIcon(session.icon, { size: 18, className: "text-white" })}
                           </div>
                           <div>
                             <p className="font-bold text-white text-sm">{session.taskName}</p>
                             <p className="text-xs text-slate-400">
-                              {new Date(session.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              {new Date(session.timestamp).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })} • {new Date(session.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                             </p>
                           </div>
                         </div>
